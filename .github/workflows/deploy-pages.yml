@@ -64,6 +64,11 @@ jobs:
           ENABLE_RPC: 'true'
         run: mkdocs build -d site
 
+      - name: Generate redirect stubs
+        # Materialises scripts/_redirects as client-side stubs + a 404 fallback,
+        # since GitHub Pages has no server-side redirects.
+        run: python scripts/gen_redirects.py --site-dir site --redirects scripts/_redirects
+
       - name: Set custom domain (CNAME)
         if: vars.CUSTOM_DOMAIN != ''
         run: echo "${{ vars.CUSTOM_DOMAIN }}" > site/CNAME
