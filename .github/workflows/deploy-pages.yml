@@ -1,0 +1,85 @@
+name: Deploy wiki to GitHub Pages
+
+# Builds the MkDocs wiki and publishes it to GitHub Pages.
+# Runs on push to the deploy branch, on manual dispatch, and when called by
+# the sync workflow (workflow_call).
+#
+# NOTE: this publishes the built site only. The wiki's redirects (mostly
+# wildcards) and custom headers cannot be served by GitHub Pages and are
+# handled by the Cloudflare layer in front of the domain — see
+# wiki-migration-plan.md.
+
+on:
+  push:
+    branches: [parity-deploy]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress production run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: parity-deploy
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install imaging libraries (Material social cards)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev \
+            libpng-dev libz-dev libpango-1.0-0 libpangocairo-1.0-0
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Cache Material social cards
+        uses: actions/cache@v4
+        with:
+          key: mkdocs-material-${{ github.run_id }}
+          restore-keys: mkdocs-material-
+          path: .cache
+
+      - name: Build site
+        env:
+          ENABLE_RPC: 'true'
+        run: mkdocs build -d site
+
+      - name: Set custom domain (CNAME)
+        if: vars.CUSTOM_DOMAIN != ''
+        run: echo "${{ vars.CUSTOM_DOMAIN }}" > site/CNAME
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
