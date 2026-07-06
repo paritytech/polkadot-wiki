@@ -1,0 +1,84 @@
+name: Sync from upstream
+
+# Keeps the deployment branch (parity-deploy) up to date with the upstream
+# content repo. The upstream is configured per-repo via the UPSTREAM_REPO
+# repository variable, so this workflow file is identical across repos.
+#
+# - Clean merge  -> push parity-deploy and deploy automatically (no review).
+# - Conflict     -> open a PR so the clash with the deploy-specific changes
+#                   gets resolved by a human (the merge then deploys).
+# - No changes   -> do nothing.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # daily, 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.merge.outputs.result }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: ${{ vars.UPSTREAM_REPO }}
+    steps:
+      - name: Verify upstream configured
+        run: |
+          if [ -z "$UPSTREAM" ]; then
+            echo "::error::Set the UPSTREAM_REPO repository variable (Settings → Secrets and variables → Actions → Variables), e.g. https://github.com/polkadot-developers/<repo>.git"
+            exit 1
+          fi
+
+      - name: Checkout deploy branch
+        uses: actions/checkout@v4
+        with:
+          ref: parity-deploy
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch --quiet upstream master
+
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "Already up to date with upstream."
+            echo "result=noop" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-edit upstream/master; then
+            # Clean merge: publish directly. The deploy is handled by the
+            # deploy job below (a GITHUB_TOKEN push would not trigger it).
+            git push origin parity-deploy
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+          else
+            # Conflict with the deploy-specific changes: hand off via a PR.
+            git merge --abort
+            branch="sync/upstream-$(date -u +%Y%m%d)"
+            git switch -c "$branch"
+            git merge --no-edit upstream/master || true
+            git add -A
+            git commit --no-edit -m "Merge upstream/master (CONFLICTS — resolve before merging)"
+            git push -f origin "$branch"
+            gh pr create \
+              --base parity-deploy --head "$branch" \
+              --title "Sync from upstream — conflicts to resolve ($(date -u +%Y-%m-%d))" \
+              --body "Automated upstream sync hit conflicts with the deploy-specific changes. Resolve the conflicts and merge to publish; merging triggers a deploy." \
+              || echo "A PR for this branch may already exist."
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: sync
+    if: needs.sync.outputs.result == 'clean'
+    uses: ./.github/workflows/deploy-pages.yml
