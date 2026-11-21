@@ -34,6 +34,6 @@ requests==2.33.1
 six==1.17.0
 urllib3==2.6.3
 watchdog==6.0.0
-wcmatch==10.1
+wcmatch==11.2
 zipp==3.23.0
 substrate-interface==1.8.1
